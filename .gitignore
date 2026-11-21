@@ -136,3 +136,17 @@ crashlytics-build.properties
 
 # Auto-generated cache in Assets folder
 /[Aa]ssets/[Ss]ceneDependencyCache*
+
+# --- Project-specific ---
+# Debug screenshots
+/Captures/
+/[Aa]ssets/Screenshots/
+/[Aa]ssets/Screenshots.meta
+# Not published
+CLAUDE.md
+CLAUDE.md.meta
+.mcp.json
+.claude/
+# Reflection lives in the repo README instead
+/[Aa]ssets/CA3/REFLECTION.md
+/[Aa]ssets/CA3/REFLECTION.md.meta
