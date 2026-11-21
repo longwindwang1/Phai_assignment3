@@ -23,3 +23,10 @@ I used to think that the more accurate the world model, the better the policy tr
 ### 6
 
 Specifically, I will design the data collection distribution from the outset to ensure it covers the states and actions that the policy might encounter later on, thereby avoiding the distribution shift issue we encountered this time. Most importantly, I will incorporate a regularization term or an uncertainty penalty into the training objective, and I will always evaluate “imagined rewards” and “actual simulation performance” separately, rather than relying solely on the former.
+## Model
+
+- **Robot:** ALOHA 2 (bimanual, two ViperX 300 S arms) from [MuJoCo Menagerie](https://github.com/google-deepmind/mujoco_menagerie/tree/main/aloha), imported from `aloha/scene.xml`
+- **Controlled DOF:** 14 actuators — per arm: waist, shoulder, elbow, forearm_roll, wrist_angle, wrist_rotate, gripper (`STATE = 28`, `ACTION = 14`)
+- **End effector (IK):** sites `left/gripper` and `right/gripper` (between the fingertips)
+- **Simulator:** MuJoCo 3.17.0 Unity plugin, integrator `implicitfast`, timestep 0.02 s
+- **Unity:** 6000.3.24f1, Unity Inference Engine 2.6.1 (ONNX)
