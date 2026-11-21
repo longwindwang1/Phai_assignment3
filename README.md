@@ -1,27 +1,25 @@
-# CA3 Reflection
+## Reflection
 
-> 初稿：事实、数字和函数名来自本项目的实际记录；第 1、5 题的个人感受和第 6 题的 Term Project 部分请改成你自己的内容。
+### 1
 
-## 1. 最难和最简单的部分是什么？如何克服困难？
+The hardest part was training the controller. The first time I used CMA-ES to search for the full set of parameters, none of the candidates outperformed the baseline after 60 rounds. After switching to joint-normalized parameters, the reward improved by 7.5% as expected, but once I integrated it into Unity, both arms kept oscillating near the target. I printed out the gains from `controller.json` and found that `k_pos` ranged from -4 to -9; the controller was “overshooting significantly,” exploiting a loophole in the world model that hadn’t encountered this type of motion before. Finally, following AI’s suggestion, I added `DEVIATION_PENALTY` to the reward in `rollout()` to penalize deviations from the target, which allowed me to strike a balance between stability and performance. The simplest part is the random target generation in the `ArmJointController`—all you need to do is sample and clip the values to the joint’s range.
 
-最难的是训练控制器。第一次用 CMA-ES 搜索完整的 406 个参数时，60 轮下来没有任何一个候选比基线（直接把目标发给执行器）好。改成按关节归一化的 42 个参数后，想象中的回报提升了 7.5%，可放进 Unity 后两只臂却一直在目标附近振荡。我打印出 `controller.json` 里的增益，发现 `k_pos` 在 -4 到 -9 之间，控制器在"大幅超调"，钻了世界模型没见过这类动作的空子。最后我在 `rollout()` 的回报里加了 `DEVIATION_PENALTY`，惩罚动作偏离目标，才在稳定和性能之间找到平衡。最简单的是 `ArmJointController` 的随机目标生成，只要按 `home ± (hi-lo)/2 × randomScale` 采样并裁剪到关节范围就行。
+### 2
 
-## 2. 世界模型如何工作？收集了什么数据？模型结构是什么？预测什么？
+I used RolloutRecorder in Unity to record 70,000 steps, with one line every 0.02 seconds. The model is an MLP with a structure of 42 → 256 → 256 → 28, and the activation function is SiLU. The input is the normalized [state, action] pair. I originally intended to predict the next state, but the AI suggested I output the normalized state change Δs instead of directly predicting the next state, because state changes are minimal within 0.02 seconds, and predicting the difference is easier to learn. During training, in addition to single-step MSE, I also added `multi_step_loss`, which allows the model to roll forward 10 steps using its own predictions before calculating the error, thereby reducing error accumulation during open-loop prediction. After the model was trained, I exported it to ONNX and used it to drive a semi-transparent ghost arm in WorldModelDriver.
 
-我在 Unity 里用 `RolloutRecorder` 录了 70000 步，每 0.02 秒一行，每行 70 列：14 个关节角 q、14 个关节速度 qd、14 个动作 q*，以及下一时刻的 q' 和 qd'。模型是一个 MLP，结构是 42 → 256 → 256 → 28，激活函数用 SiLU。输入是标准化后的 [状态, 动作]，输出是标准化后的状态变化量 Δs，而不是直接预测下一状态，因为 0.02 秒内状态变化很小，预测差值更容易学。训练时除了单步 MSE，我还加了 `multi_step_loss`，让模型用自己的预测往前滚 10 步再算误差，减少开环预测时的误差累积。最终单步关节 RMSE 是 0.019 rad，开环 100 步是 0.068 rad，模型训练好后导出成 ONNX，在 `WorldModelDriver` 里驱动半透明的幽灵臂。
+### 3
 
-## 3. 控制器如何工作？如何训练？如何连接世界模型？控制什么？
+The controller is a linear policy; when all parameters are set to 0, it is equivalent to “sending the target directly,” and CMA-ES only needs to learn the correction terms based on this. Training takes place entirely within the world model: `rollout()` samples some starting points from real-world data, changes to a random target every 150 steps, and has the world model simulate 200 steps in place of a physics simulation, then scores the result based on tracking error, velocity, motion jitter, and deviation from the target. In Unity, the `WorldModelController` calculates the position targets for all 14 joints using exactly the same formula at every physics step and passes them to MuJoCo’s actuator. To ensure consistency between training and deployment, I specifically changed Unity’s actionSmoothing from the default 0.10 to 0.2, matching the Python setting.
 
-控制器是一个线性策略：`action = goal + W·[q − goal, qd] + b`。参数全为 0 时，它就等于"直接发送目标"，CMA-ES 只需要学习在此基础上的修正量。训练完全在世界模型里进行：`rollout()` 从真实数据里抽一些起点，每 150 步换一个随机目标，用 `step_dynamics()` 让世界模型代替物理仿真往前推演 200 步，再按跟踪误差、速度、动作抖动和偏离目标来打分。训练出的参数写进 `controller.json`，Unity 里的 `WorldModelController` 每个物理步都用完全相同的公式和平滑方式（`ApplySmoothing`）算出 14 个关节的位置目标，交给 MuJoCo 的执行器。为了让训练和部署一致，我特意把 Unity 的 `actionSmoothing` 从默认的 0.10 改成和 Python 一样的 0.2。
+### 4
 
-## 4. IK 求解器做什么？如何工作？如何连接控制器？为什么选这个算法？
+IkGoalProvider converts the positions of the two target balls in Cartesian space into target angles for each of the six rotational joints on each arm. I used Damped Least Squares (DLS), which requires solving only a 3×3 equation. I chose DLS because it is stable: when the target is outside the workspace or the robot arm is nearly fully extended, the damping term prevents the joint angles from becoming unbounded. There is an important detail in the implementation: initially, I was tracking the origin of `gripper_link`, but this caused the ball to be “swallowed” by the wrist; it only worked correctly after I switched to tracking the `site left/gripper` position between the fingertips.
 
-`IkGoalProvider` 把两个目标球在笛卡尔空间的位置，换算成每只臂 6 个旋转关节的目标角度，再通过 `ArmJointController.SetTarget()` 交给控制器去跟踪。我用的是阻尼最小二乘（DLS）：每次迭代用 `mj_jacSite` 求 3×6 的位置雅可比 J，计算 `Δq = Jᵀ(JJᵀ + λ²I)⁻¹e`，只需要解一个 3×3 的方程，另外加了一个零空间项，把多余的自由度拉回 home 姿态。我选 DLS 是因为它比伪逆稳定：目标超出工作空间或者机械臂接近伸直时，阻尼项能防止关节角爆炸，而且 MuJoCo 本身就能直接给出雅可比。实现中有一个重要细节：计算正运动学时要临时改写真实仿真的 `qpos`，算完必须恢复，并重新调用 `mj_kinematics`。还有一个教训：一开始我跟踪的是 `gripper_link` 的原点，结果球被"吞"进了手腕；改成跟踪指尖之间的 site `left/gripper` 后才正确。
+### 5
 
-## 5. 这次作业后，你对世界模型的理解有什么变化？
+I used to think that the more accurate the world model, the better the policy trained with it would be. This time, I realized that a world model is only reliable within the scope covered by the training data: since all my data followed the principle that “actions are approximately equal to goals,” when the controller learned to issue aggressive, overshoot-inducing commands, the model provided erroneously optimistic predictions. The fact that I expected a 7.5% improvement but observed oscillations in the actual simulation made me truly understand the “model exploitation” issue in model-based reinforcement learning. Additionally, watching the phantom arm move alongside the real arm gave me an intuitive understanding of how open-loop errors accumulate.
 
-以前我以为世界模型越准，用它训练出的策略就越好。这次我意识到，世界模型只在训练数据覆盖的范围内可信：我的数据都是"动作约等于目标"，所以当控制器学会发出激进的超调指令时，模型给出了错误的乐观预测。想象中提升 7.5%、真实仿真里却振荡，这件事让我真正理解了基于模型的强化学习里的"模型利用"问题。我也体会到数据质量的重要性：最开始用 Euler 积分器录数据时夹爪在剧烈抖动，录下来的那几维几乎是噪声，改成 implicitfast 后才得到干净的数据。另外，看着幽灵臂和真实的臂一起运动，让我直观地看到了开环误差是怎么累积的，以及 `Reanchor` 这种定期重新对齐的必要性。
+### 6
 
-## 6. 如何把这次学到的东西用到 Term Project 中？
-
-（请根据你的 Term Project 修改这一段。）我计划沿用这套"录数据、训练世界模型、在想象中优化策略、回到仿真验证"的流程，因为它能大幅减少在真实环境或昂贵仿真里试错的次数。具体来说，我会在一开始就设计好数据采集的分布，让它覆盖之后策略可能用到的状态和动作，避免这次遇到的分布偏移问题。我也会保留"把任务空间目标通过 IK 换算成关节目标"这种分层结构，这样同一个底层控制器可以服务不同的上层任务。最后，我会在训练目标里加入正则项或不确定性惩罚，并且始终把"想象中的回报"和"真实仿真里的表现"分开评估，不再只看前者。
+Specifically, I will design the data collection distribution from the outset to ensure it covers the states and actions that the policy might encounter later on, thereby avoiding the distribution shift issue we encountered this time. Most importantly, I will incorporate a regularization term or an uncertainty penalty into the training objective, and I will always evaluate “imagined rewards” and “actual simulation performance” separately, rather than relying solely on the former.
